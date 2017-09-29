@@ -43,21 +43,56 @@ type Writer interface {
 	// Write writes a single row to w along with any necessary quoting.
 	// A record is a slice of strings with each string being one field.
 	Write(record []string) error
+
 	// Flush writes any buffered data to the underlying io.Writer.
 	// To check if an error occurred during the Flush, call Error.
 	Flush()
+
 	// Error reports any error that has occurred during a previous Write or Flush.
 	Error() error
+
 	// WriteAll writes multiple CSV records to w using Write and then calls Flush.
 	WriteAll(records [][]string) error
+}
+
+// Iterator is an interface which provides method to interating over tabular
+// data. It is heavly inspired by bufio.Scanner.
+// Iterating stops unrecoverably at EOF, the first I/O error, or a token too large to fit in the buffer.
+type Iterator interface {
+	// Next advances the table interator to the next row, which will be available through the Cast or Row methods.
+	// It returns false when the iterator stops, either by reaching the end of the table or an error.
+	// After Next returns false, the Err method will return any error that ocurred during the iteration, except if it was io.EOF, Err
+	// will return nil.
+	// Next could automatically buffer some data, improving reading performance. It could also block, if necessary.
+	Next() bool
+
+	// Row returns the most recent row fetched by a call to Next as a newly allocated string slice
+	// holding its fields.
+	Row() []string
+
+	// Err returns nil if no errors happened during iteration, or the actual error
+	// otherwise.
+	Err() error
+
+	// Close frees up any resources used during the iteration process.
+	Close() error
 }
 
 // StringWriter is a simple Writer implementation which is backed up by
 // an in memory bytes.Buffer.
 type StringWriter struct {
-	csv.Writer
+	csvWriter csv.Writer
+	content   *bytes.Buffer
+}
 
-	content *bytes.Buffer
+// NewStringWriter returns a Writer that writes CSV to a string.
+// It exports a String() method, which returns its contents.
+func NewStringWriter() *StringWriter {
+	buf := &bytes.Buffer{}
+	return &StringWriter{
+		csvWriter: *csv.NewWriter(buf),
+		content:   buf,
+	}
 }
 
 // String returns the content that has been written so far encoded as CSV.
@@ -65,22 +100,18 @@ func (s *StringWriter) String() string {
 	return s.content.String()
 }
 
-// NewStringWriter returns a Writer that writes CSV to a string.
-// It exports a String() method, which returns its contents.
-func NewStringWriter() *StringWriter {
-	buf := &bytes.Buffer{}
-	return &StringWriter{*csv.NewWriter(buf), buf}
-}
-
-// FromSlices creates a new SliceTable using passed-in arguments.
-func FromSlices(headers []string, content [][]string) *SliceTable {
-	return &SliceTable{headers, content}
-}
-
 // SliceTable offers a simple table implementation backed by slices.
 type SliceTable struct {
 	headers []string
 	content [][]string
+}
+
+// FromSlices creates a new SliceTable using passed-in arguments.
+func FromSlices(headers []string, content [][]string) *SliceTable {
+	return &SliceTable{
+		headers: headers,
+		content: content,
+	}
 }
 
 // Headers returns the headers of the tabular data.
@@ -105,33 +136,25 @@ type sliceIterator struct {
 	pos     int
 }
 
+// Next increments the sliceIterator.
 func (i *sliceIterator) Next() bool {
 	i.pos++
 	return i.pos <= len(i.content)
 }
-func (i *sliceIterator) Row() []string { return i.content[i.pos-1] }
-func (i *sliceIterator) Err() error    { return nil }
-func (i *sliceIterator) Close() error  { return nil }
 
-// Iterator is an interface which provides method to interating over tabular
-// data. It is heavly inspired by bufio.Scanner.
-// Iterating stops unrecoverably at EOF, the first I/O error, or a token too large to fit in the buffer.
-type Iterator interface {
-	// Next advances the table interator to the next row, which will be available through the Cast or Row methods.
-	// It returns false when the iterator stops, either by reaching the end of the table or an error.
-	// After Next returns false, the Err method will return any error that ocurred during the iteration, except if it was io.EOF, Err
-	// will return nil.
-	// Next could automatically buffer some data, improving reading performance. It could also block, if necessary.
-	Next() bool
+// Row returns a row at the given sliceIterator.
+func (i *sliceIterator) Row() []string {
+	return i.content[i.pos-1]
+}
 
-	// Row returns the most recent row fetched by a call to Next as a newly allocated string slice
-	// holding its fields.
-	Row() []string
+// Err allows the sliceIterator to implement the
+// Iterator interface. Err always returns nil.
+func (i *sliceIterator) Err() error {
+	return nil
+}
 
-	// Err returns nil if no errors happened during iteration, or the actual error
-	// otherwise.
-	Err() error
-
-	// Close frees up any resources used during the iteration process.
-	Close() error
+// Close allows the sliceIterator to implement the
+// Iterator interface. Close allows returns nil.
+func (i *sliceIterator) Close() error {
+	return nil
 }
